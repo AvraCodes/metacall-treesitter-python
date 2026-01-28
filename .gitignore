@@ -1,0 +1,21 @@
+# Build directory
+build/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Output files
+output.json
+
+# Compiled files
+*.o
+*.so
+*.dylib
+*.a
