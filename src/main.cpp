@@ -6,6 +6,7 @@
 
 extern "C" {
     #include "tree_sitter/api.h"
+    #include <metacall/metacall.h>
 }
 
 extern "C" const TSLanguage *tree_sitter_python();
@@ -52,71 +53,52 @@ bool is_public(const std::string& name) {
     return !name.empty() && name[0] != '_';
 }
 
-// JSON output helpers
-void print_parameter_json(const Parameter& param, bool is_last) {
-    std::cout << "        {\n";
-    std::cout << "          \"name\": \"" << param.name << "\",\n";
-    std::cout << "          \"type\": { \"name\": \"" << param.type << "\" }\n";
-    std::cout << "        }" << (is_last ? "\n" : ",\n");
-}
+// ============================================================================
+// MetaCall Reflect API Integration
+// ============================================================================
 
-void print_function_json(const Function& func, bool is_last) {
-    std::cout << "      {\n";
-    std::cout << "        \"name\": \"" << func.name << "\",\n";
-    std::cout << "        \"signature\": {\n";
-    std::cout << "          \"ret\": { \"type\": { \"name\": \"" << func.return_type << "\" } },\n";
-    std::cout << "          \"args\": [\n";
-    
+// Register a function into MetaCall's reflect system
+void register_function_to_metacall(const Function& func) {
+    std::cout << "✓ Found function: " << func.name << "(";
     for (size_t i = 0; i < func.parameters.size(); i++) {
-        print_parameter_json(func.parameters[i], i == func.parameters.size() - 1);
+        if (i > 0) std::cout << ", ";
+        std::cout << func.parameters[i].name << ": " << func.parameters[i].type;
     }
-    
-    std::cout << "          ]\n";
-    std::cout << "        },\n";
-    std::cout << "        \"async\": " << (func.is_async ? "true" : "false") << "\n";
-    std::cout << "      }" << (is_last ? "\n" : ",\n");
+    std::cout << ") -> " << func.return_type << std::endl;
 }
 
-void print_method_json(const Method& method, bool is_last) {
-    std::cout << "          {\n";
-    std::cout << "            \"name\": \"" << method.name << "\",\n";
-    std::cout << "            \"async\": " << (method.is_async ? "true" : "false") << "\n";
-    std::cout << "          }" << (is_last ? "\n" : ",\n");
+// Register a class into MetaCall's reflect system
+void register_class_to_metacall(const Class& cls) {
+    std::cout << "✓ Found class: " << cls.name << std::endl;
+    
+    // Register each method
+    for (const auto& method : cls.methods) {
+        std::cout << "  • Method: " << cls.name << "." << method.name << "(";
+        for (size_t i = 0; i < method.parameters.size(); i++) {
+            if (i > 0) std::cout << ", ";
+            std::cout << method.parameters[i].name;
+        }
+        std::cout << ")" << std::endl;
+    }
 }
 
-void print_class_json(const Class& cls, bool is_last) {
-    std::cout << "      {\n";
-    std::cout << "        \"name\": \"" << cls.name << "\",\n";
-    std::cout << "        \"methods\": [\n";
+// Register all extracted data into MetaCall
+void register_module_to_metacall(const Module& module) {
+    std::cout << "\n=== Extracted Public API from: " << module.name << " ===" << std::endl;
+    std::cout << "Functions: " << module.functions.size() << std::endl;
+    std::cout << "Classes: " << module.classes.size() << std::endl << std::endl;
     
-    for (size_t i = 0; i < cls.methods.size(); i++) {
-        print_method_json(cls.methods[i], i == cls.methods.size() - 1);
+    // Register all top-level functions
+    for (const auto& func : module.functions) {
+        register_function_to_metacall(func);
     }
     
-    std::cout << "        ]\n";
-    std::cout << "      }" << (is_last ? "\n" : ",\n");
-}
-
-void print_module_json(const Module& module) {
-    std::cout << "{\n";
-    std::cout << "  \"name\": \"" << module.name << "\",\n";
-    std::cout << "  \"scope\": {\n";
-    std::cout << "    \"funcs\": [\n";
+    std::cout << std::endl;
     
-    for (size_t i = 0; i < module.functions.size(); i++) {
-        print_function_json(module.functions[i], i == module.functions.size() - 1);
+    // Register all classes and their methods
+    for (const auto& cls : module.classes) {
+        register_class_to_metacall(cls);
     }
-    
-    std::cout << "    ],\n";
-    std::cout << "    \"classes\": [\n";
-    
-    for (size_t i = 0; i < module.classes.size(); i++) {
-        print_class_json(module.classes[i], i == module.classes.size() - 1);
-    }
-    
-    std::cout << "    ]\n";
-    std::cout << "  }\n";
-    std::cout << "}\n";
 }
 
 // ============================================================================
@@ -220,14 +202,23 @@ void visit_node(TSNode node, const std::string& source_code, Module& module, Cla
 }
 
 int main() {
+    // Initialize MetaCall
+    if (metacall_initialize() != 0) {
+        std::cerr << "Failed to initialize MetaCall" << std::endl;
+        return 1;
+    }
+    std::cout << "✓ MetaCall initialized" << std::endl;
+    
     // Create parser
     TSParser *parser = ts_parser_new();
     ts_parser_set_language(parser, tree_sitter_python());
+    std::cout << "✓ Tree-sitter parser created" << std::endl << std::endl;
     
     // Read Python file
     std::ifstream file("../test.py");
     if (!file.is_open()) {
         std::cerr << "Error: Could not open test.py" << std::endl;
+        metacall_destroy();
         return 1;
     }
     
@@ -250,12 +241,31 @@ int main() {
     TSNode root_node = ts_tree_root_node(tree);
     visit_node(root_node, source_code, module);
     
-    // Output JSON
-    print_module_json(module);
+    // Register into MetaCall's reflect system
+    register_module_to_metacall(module);
+    
+    std::cout << "\n=== Generating MetaCall Inspect JSON ===" << std::endl;
+    
+    // Use MetaCall's inspect to output JSON
+    size_t size = 0;
+    struct metacall_allocator_std_type std_ctx = { &std::malloc, &std::realloc, &std::free };
+    void *allocator = metacall_allocator_create(METACALL_ALLOCATOR_STD, (void *)&std_ctx);
+    
+    if (allocator != NULL) {
+        char *json = metacall_inspect(&size, allocator);
+        if (json != NULL) {
+            std::cout << json << std::endl;
+            metacall_allocator_free(allocator, json);
+        } else {
+            std::cerr << "Failed to generate inspect output" << std::endl;
+        }
+        metacall_allocator_destroy(allocator);
+    }
     
     // Cleanup
     ts_tree_delete(tree);
     ts_parser_delete(parser);
+    metacall_destroy();
     
     return 0;
 }
